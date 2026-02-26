@@ -1,3 +1,2 @@
-// Webview entry point - bundles game + sprites together
-export * from './sprites';
+// Webview entry point
 import './game';

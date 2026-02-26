@@ -1,8 +1,25 @@
 import * as vscode from 'vscode';
 import { createEventListeners } from './events';
 
+let currentPanel: vscode.WebviewPanel | undefined;
+let statusBarItem: vscode.StatusBarItem;
+
 export function activate(context: vscode.ExtensionContext) {
-  const cmd = vscode.commands.registerCommand('copilotGame.open', () => {
+  // Status bar item
+  statusBarItem = vscode.window.createStatusBarItem(vscode.StatusBarAlignment.Right, 100);
+  statusBarItem.text = '$(smiley) Mona';
+  statusBarItem.tooltip = 'Click to open Copilot Game';
+  statusBarItem.command = 'copilotGame.open';
+  statusBarItem.show();
+  context.subscriptions.push(statusBarItem);
+
+  const openCmd = vscode.commands.registerCommand('copilotGame.open', () => {
+    if (currentPanel) {
+      currentPanel.reveal();
+      return;
+    }
+
+    const config = vscode.workspace.getConfiguration('copilotGame');
     const panel = vscode.window.createWebviewPanel(
       'copilotGame',
       '🐱 Mona\'s Adventure',
@@ -10,13 +27,21 @@ export function activate(context: vscode.ExtensionContext) {
       { enableScripts: true, retainContextWhenHidden: true }
     );
 
+    currentPanel = panel;
     panel.webview.html = getWebviewContent(panel.webview, context);
 
-    const listeners = createEventListeners(panel);
-    panel.onDidDispose(() => listeners.forEach(d => d.dispose()));
+    const listeners = createEventListeners(panel, context);
+    panel.onDidDispose(() => {
+      listeners.forEach(d => d.dispose());
+      currentPanel = undefined;
+      statusBarItem.text = '$(smiley) Mona';
+    });
     context.subscriptions.push(...listeners);
 
-    // Send init after webview is ready
+    // Update status bar
+    statusBarItem.text = '$(smiley) Mona 🎮';
+
+    // Send current file
     setTimeout(() => {
       const editor = vscode.window.activeTextEditor;
       if (editor) {
@@ -28,13 +53,35 @@ export function activate(context: vscode.ExtensionContext) {
     }, 500);
   });
 
-  context.subscriptions.push(cmd);
+  context.subscriptions.push(openCmd);
+
+  // Auto-open if configured
+  const config = vscode.workspace.getConfiguration('copilotGame');
+  if (config.get('autoOpen', false)) {
+    vscode.commands.executeCommand('copilotGame.open');
+  }
+
+  // Copilot suggestion detection via text document change heuristic
+  let lastEdit = 0;
+  context.subscriptions.push(
+    vscode.workspace.onDidChangeTextDocument((e) => {
+      if (!currentPanel) return;
+      // Copilot inserts tend to be multi-line or large single inserts without a preceding user keystroke < 50ms
+      const now = Date.now();
+      for (const change of e.contentChanges) {
+        if (change.text.length > 20 && (now - lastEdit) > 200) {
+          // Likely a Copilot/completion insert
+          currentPanel.webview.postMessage({ type: 'copilotAssist' });
+          break;
+        }
+      }
+      lastEdit = now;
+    })
+  );
 }
 
 function getWebviewContent(webview: vscode.Webview, context: vscode.ExtensionContext): string {
   const nonce = getNonce();
-
-  // Read the bundled webview JS
   const scriptUri = webview.asWebviewUri(
     vscode.Uri.joinPath(context.extensionUri, 'dist', 'webview.js')
   );
@@ -60,6 +107,19 @@ function getWebviewContent(webview: vscode.Webview, context: vscode.ExtensionCon
       display: flex;
       flex-direction: column;
     }
+    #xp-bar {
+      height: 4px;
+      background: #1a1a2e;
+      width: 100%;
+      position: relative;
+    }
+    #xp-bar-fill {
+      height: 100%;
+      width: 0%;
+      background: linear-gradient(90deg, #3498db, #2ecc71, #f1c40f);
+      transition: width 0.3s ease;
+      border-radius: 0 2px 2px 0;
+    }
     canvas {
       flex: 1;
       width: 100%;
@@ -75,20 +135,46 @@ function getWebviewContent(webview: vscode.Webview, context: vscode.ExtensionCon
       border-top: 2px solid #2d2d5e;
       font-size: 11px;
       height: 36px;
-      gap: 12px;
+      gap: 8px;
+    }
+    #state-icon { font-size: 14px; min-width: 20px; }
+    #level {
+      color: #f1c40f;
+      font-weight: bold;
+      min-width: 40px;
+      font-size: 10px;
     }
     #file { color: #3498db; flex-shrink: 1; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
-    #status { color: #a0a0c0; flex: 1; text-align: center; }
+    #status { color: #a0a0c0; flex: 1; text-align: center; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
     #streak { color: #f39c12; font-weight: bold; min-width: 50px; text-align: right; }
+    #stats-tooltip {
+      color: #7a7a9e;
+      font-size: 9px;
+      position: absolute;
+      bottom: 40px;
+      left: 12px;
+      background: #1a1a2eee;
+      padding: 4px 8px;
+      border-radius: 4px;
+      border: 1px solid #2d2d5e;
+      pointer-events: none;
+      opacity: 0;
+      transition: opacity 0.2s;
+    }
+    #hud:hover #stats-tooltip { opacity: 1; }
   </style>
 </head>
 <body>
   <div id="game-container">
+    <div id="xp-bar"><div id="xp-bar-fill"></div></div>
     <canvas id="game"></canvas>
     <div id="hud">
+      <span id="state-icon">😊</span>
+      <span id="level">Lv.1</span>
       <span id="file">📁 Ready</span>
       <span id="status">🐱 Mona is ready!</span>
       <span id="streak"></span>
+      <div id="stats-tooltip"></div>
     </div>
   </div>
   <script nonce="${nonce}" src="${scriptUri}"></script>

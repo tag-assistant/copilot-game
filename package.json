@@ -1,23 +1,64 @@
 {
   "name": "copilot-game",
   "displayName": "Copilot Game - Mona's Adventure",
-  "description": "Watch Mona the cat react to your coding in a pixel art game world",
-  "version": "0.1.0",
+  "description": "A pixel art pet that lives in your editor — Mona the cat-topus reacts to your coding, fights bugs, and levels up as you work!",
+  "version": "0.2.0",
   "publisher": "tag-assistant",
+  "license": "MIT",
   "engines": {
     "vscode": "^1.85.0"
   },
-  "categories": ["Other"],
-  "activationEvents": [],
+  "categories": ["Other", "Visualization"],
+  "keywords": ["copilot", "game", "pixel-art", "pet", "tamagotchi", "coding-companion", "mona", "gamification"],
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/tag-assistant/copilot-game"
+  },
+  "icon": "icon.png",
+  "activationEvents": ["onStartupFinished"],
   "main": "./dist/extension.js",
   "contributes": {
     "commands": [
       {
         "command": "copilotGame.open",
         "title": "Open Copilot Game",
-        "category": "Copilot Game"
+        "category": "Copilot Game",
+        "icon": "$(smiley)"
       }
-    ]
+    ],
+    "keybindings": [
+      {
+        "command": "copilotGame.open",
+        "key": "ctrl+shift+m",
+        "mac": "cmd+shift+m"
+      }
+    ],
+    "configuration": {
+      "title": "Copilot Game",
+      "properties": {
+        "copilotGame.autoOpen": {
+          "type": "boolean",
+          "default": false,
+          "description": "Automatically open the game panel when VS Code starts"
+        },
+        "copilotGame.soundEnabled": {
+          "type": "boolean",
+          "default": false,
+          "description": "Enable retro sound effects"
+        },
+        "copilotGame.monaSize": {
+          "type": "number",
+          "default": 64,
+          "enum": [48, 64, 96],
+          "description": "Mona sprite size in pixels"
+        },
+        "copilotGame.showXPBar": {
+          "type": "boolean",
+          "default": true,
+          "description": "Show the XP progress bar at the top"
+        }
+      }
+    }
   },
   "scripts": {
     "build": "esbuild src/extension.ts --bundle --outfile=dist/extension.js --external:vscode --format=cjs --platform=node && esbuild src/webview/index.ts --bundle --outfile=dist/webview.js --format=iife --platform=browser",
