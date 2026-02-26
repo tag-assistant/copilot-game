@@ -5,10 +5,9 @@ let currentPanel: vscode.WebviewPanel | undefined;
 let statusBarItem: vscode.StatusBarItem;
 
 export function activate(context: vscode.ExtensionContext) {
-  // Status bar item
   statusBarItem = vscode.window.createStatusBarItem(vscode.StatusBarAlignment.Right, 100);
   statusBarItem.text = '$(smiley) Mona';
-  statusBarItem.tooltip = 'Click to open Copilot Game';
+  statusBarItem.tooltip = 'Open Copilot Game — Watch Copilot work!';
   statusBarItem.command = 'copilotGame.open';
   statusBarItem.show();
   context.subscriptions.push(statusBarItem);
@@ -19,10 +18,9 @@ export function activate(context: vscode.ExtensionContext) {
       return;
     }
 
-    const config = vscode.workspace.getConfiguration('copilotGame');
     const panel = vscode.window.createWebviewPanel(
       'copilotGame',
-      '🐱 Mona\'s Adventure',
+      '🐱 Mona — Copilot Visualizer',
       vscode.ViewColumn.Beside,
       { enableScripts: true, retainContextWhenHidden: true }
     );
@@ -38,46 +36,15 @@ export function activate(context: vscode.ExtensionContext) {
     });
     context.subscriptions.push(...listeners);
 
-    // Update status bar
     statusBarItem.text = '$(smiley) Mona 🎮';
-
-    // Send current file
-    setTimeout(() => {
-      const editor = vscode.window.activeTextEditor;
-      if (editor) {
-        panel.webview.postMessage({
-          type: 'fileOpen',
-          file: vscode.workspace.asRelativePath(editor.document.uri),
-        });
-      }
-    }, 500);
   });
 
   context.subscriptions.push(openCmd);
 
-  // Auto-open if configured
   const config = vscode.workspace.getConfiguration('copilotGame');
   if (config.get('autoOpen', false)) {
     vscode.commands.executeCommand('copilotGame.open');
   }
-
-  // Copilot suggestion detection via text document change heuristic
-  let lastEdit = 0;
-  context.subscriptions.push(
-    vscode.workspace.onDidChangeTextDocument((e) => {
-      if (!currentPanel) return;
-      // Copilot inserts tend to be multi-line or large single inserts without a preceding user keystroke < 50ms
-      const now = Date.now();
-      for (const change of e.contentChanges) {
-        if (change.text.length > 20 && (now - lastEdit) > 200) {
-          // Likely a Copilot/completion insert
-          currentPanel.webview.postMessage({ type: 'copilotAssist' });
-          break;
-        }
-      }
-      lastEdit = now;
-    })
-  );
 }
 
 function getWebviewContent(webview: vscode.Webview, context: vscode.ExtensionContext): string {
@@ -146,7 +113,7 @@ function getWebviewContent(webview: vscode.Webview, context: vscode.ExtensionCon
     }
     #file { color: #3498db; flex-shrink: 1; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
     #status { color: #a0a0c0; flex: 1; text-align: center; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
-    #streak { color: #f39c12; font-weight: bold; min-width: 50px; text-align: right; }
+    #streak { color: #58a6ff; font-weight: bold; min-width: 80px; text-align: right; font-size: 10px; }
     #stats-tooltip {
       color: #7a7a9e;
       font-size: 9px;
@@ -169,10 +136,10 @@ function getWebviewContent(webview: vscode.Webview, context: vscode.ExtensionCon
     <div id="xp-bar"><div id="xp-bar-fill"></div></div>
     <canvas id="game"></canvas>
     <div id="hud">
-      <span id="state-icon">😊</span>
+      <span id="state-icon">😴</span>
       <span id="level">Lv.1</span>
       <span id="file">📁 Ready</span>
-      <span id="status">🐱 Mona is ready!</span>
+      <span id="status">😴 Waiting for Copilot...</span>
       <span id="streak"></span>
       <div id="stats-tooltip"></div>
     </div>

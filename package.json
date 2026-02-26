@@ -1,15 +1,15 @@
 {
   "name": "copilot-game",
-  "displayName": "Copilot Game - Mona's Adventure",
-  "description": "A pixel art pet that lives in your editor — Mona the cat-topus reacts to your coding, fights bugs, and levels up as you work!",
-  "version": "0.2.0",
+  "displayName": "Copilot Game - Agent Visualizer",
+  "description": "Watch Copilot work as a pixel art adventure! Mona the cat-topus visualizes what Copilot agent mode is doing — reading files, writing code, running commands, and fighting bugs.",
+  "version": "0.3.0",
   "publisher": "tag-assistant",
   "license": "MIT",
   "engines": {
     "vscode": "^1.85.0"
   },
   "categories": ["Other", "Visualization"],
-  "keywords": ["copilot", "game", "pixel-art", "pet", "tamagotchi", "coding-companion", "mona", "gamification"],
+  "keywords": ["copilot", "agent", "visualizer", "game", "pixel-art", "mona", "coding-companion", "gamification"],
   "repository": {
     "type": "git",
     "url": "https://github.com/tag-assistant/copilot-game"

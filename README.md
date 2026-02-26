@@ -1,94 +1,66 @@
-# 🐱 Copilot Game - Mona's Adventure
+# 🐱 Copilot Game — Agent Visualizer
 
-A pixel art coding companion that lives in your VS Code editor! Watch **Mona the cat-topus** (a cat with octopus tentacles) react to your coding in real-time.
+**Watch Copilot work as a pixel art adventure!**
 
-## ✨ Features
+Mona the cat-topus is Copilot's avatar. She visualizes what Copilot agent mode is doing in real-time — reading files, writing code, running terminal commands, and fighting bugs.
 
-### 🎮 Living Pixel Art Pet
-- **Mona** is a hand-drawn 20x20 pixel art character with smooth 4-frame animations
-- She reacts to everything you do: coding, saving, opening files, using the terminal
-- Tentacles wave and animate with each action
-- Falls asleep (curled up with ZZZ) after 30 seconds of idle
+## ✨ What It Does
 
-### ⚔️ Bug Combat System
-- **Errors** in your code spawn red bugs that walk toward Mona
-- **Warnings** spawn smaller yellow bugs
-- Mona auto-attacks with tentacle swipes when fighting
-- Hit effects: white flash, knockback, death animation with particles
-- Error count badge in the corner
+When Copilot (or any AI agent in VS Code) starts working, Mona comes alive:
 
-### 📊 XP & Leveling System
-- Earn XP for: coding (1 XP), visiting files (5 XP), saving (10 XP), defeating bugs (10 XP), Copilot assists (15 XP)
-- Level up with golden sparkle animations and fanfare
-- XP bar at the top of the panel
-- Stats persist across sessions
+- 📂 **Agent reads a file** → Mona walks into that room
+- ⌨️ **Agent edits code** → Mona codes (building animation + particles)
+- 🏗️ **Agent creates a file** → Mona builds a new room (construction particles)
+- 🗑️ **Agent deletes code** → Mona demolishes (breaking animation)
+- 🔮 **Agent runs terminal commands** → Mona casts spells
+- 🐛 **Errors appear** → Bugs spawn, Mona fights them
+- 🎉 **Errors fixed** → Bugs die, celebration!
+- 😴 **Agent stops** → Mona sleeps, session summary appears
 
-### 🏠 Dynamic Room Environments
-- Each file gets a unique room with hue based on filename
-- **Furniture changes by file type:**
-  - `.ts/.js` → Computer desk, monitors, coffee cup
-  - `.json/.yaml` → Filing cabinet
-  - `.md/.txt` → Bookshelf
-  - `.css/.html` → Paint easel
-- Door sprite for room transitions
-- Ambient floating dust motes
+## 🤖 Smart Agent Detection
 
-### ✨ Particle Effects
-- **Coding:** Blue sparkles float from keyboard area
-- **Terminal:** Purple magic circle under Mona
-- **Save:** Golden pulse wave radiates outward
-- **Errors:** Red flash + screen shake
-- **Celebrate:** Confetti shower
-- **Level Up:** Expanding ring of golden particles
-- **Copilot:** Special blue sparkle effect
+Uses pure VS Code extension API heuristics to distinguish agent activity from human typing:
 
-### 🤖 Copilot Integration
-- Detects Copilot suggestion accepts (large text insertions)
-- Special sparkle effect + "✨ Copilot assisted!" status
-- Copilot assists tracked as a separate stat
+- Document changes in non-focused files → agent
+- Large block insertions (>20 chars at once) → agent
+- Rapid multi-file edits (<2s between files) → agent
+- Files opening without user click → agent
+- Terminal activity without user focus → agent
 
-### 🔊 Retro Sound Effects (Optional)
-- Web Audio API oscillator bleeps
-- Typing clicks, save dings, error tones, bug pop, level-up fanfare
-- Disabled by default — enable in settings
+Works with **any** AI agent: GitHub Copilot, Claude, Cursor, etc.
 
-### 📺 HUD
-- XP progress bar (gradient: blue → green → gold)
-- Level indicator
-- Current state icon (⌨️ ⚔️ 🔮 😴)
-- Streak counter
-- Hover for full stats tooltip
+## 🎮 Features
 
-## ⌨️ Usage
+- **Activity Log** — Retro terminal showing Copilot's actions in real-time
+- **File Map** — Visual showing files as rooms with Mona's path
+- **Session Summary** — Stats when Copilot finishes (files, lines, time)
+- **Copilot Status Badge** — Pulsing indicator (ACTIVE / IDLE / WAITING)
+- **XP & Leveling** — Mona levels up as Copilot works
+- **Bug Combat** — Errors spawn as pixel art enemies
+- **Particle Effects** — Coding sparkles, construction dust, spell circles
+- **8 Sprite Animations** — idle, walk, code, spell, fight, celebrate, damage, sleep
 
-1. **Open the game:** `Ctrl+Shift+M` / `Cmd+Shift+M` or click "Mona" in the status bar
-2. **Code normally** — Mona reacts to everything
-3. **Fix bugs** — watch Mona fight error bugs with her tentacles
-4. **Level up** — track your coding progress
+## 📦 Install
+
+1. Download the `.vsix` from [Releases](https://github.com/tag-assistant/copilot-game/releases)
+2. In VS Code: `Ctrl+Shift+P` → "Install from VSIX..."
+3. Open with `Ctrl+Shift+M` / `Cmd+Shift+M` or click the Mona status bar icon
 
 ## ⚙️ Settings
 
 | Setting | Default | Description |
 |---------|---------|-------------|
-| `copilotGame.autoOpen` | `false` | Open panel on VS Code start |
+| `copilotGame.autoOpen` | `false` | Auto-open when VS Code starts |
 | `copilotGame.soundEnabled` | `false` | Enable retro sound effects |
-| `copilotGame.monaSize` | `64` | Sprite size: 48, 64, or 96 |
+| `copilotGame.monaSize` | `64` | Sprite size (48, 64, or 96) |
 | `copilotGame.showXPBar` | `true` | Show XP progress bar |
 
-## 🛠️ Development
+## 🔧 Technical
 
-```bash
-npm run build     # Build extension + webview
-npm run watch     # Watch mode
-npm run package   # Create .vsix
-```
-
-## 📦 Install
-
-Install the `.vsix` file:
-1. Open VS Code
-2. `Ctrl+Shift+P` → "Extensions: Install from VSIX..."
-3. Select the `.vsix` file
+- Zero dependencies beyond VS Code API
+- No MCP tools registered (doesn't waste Copilot context)
+- Pure heuristic-based detection
+- Performant canvas rendering with pixel art sprites
 
 ## License
 

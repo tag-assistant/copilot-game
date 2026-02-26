@@ -989,11 +989,6 @@ TTTTkddoooooddkTTTT
   function sfxType() {
     playTone(800 + Math.random() * 200, 0.05, "square", 0.03);
   }
-  function sfxSave() {
-    playTone(523, 0.1, "sine", 0.06);
-    setTimeout(() => playTone(659, 0.1, "sine", 0.06), 100);
-    setTimeout(() => playTone(784, 0.15, "sine", 0.06), 200);
-  }
   function sfxError() {
     playTone(200, 0.15, "sawtooth", 0.06);
     setTimeout(() => playTone(150, 0.2, "sawtooth", 0.06), 150);
@@ -1050,10 +1045,10 @@ TTTTkddoooooddkTTTT
     monaY: 0,
     targetX: 0,
     targetY: 0,
-    state: "idle",
+    state: "sleep",
     stateTimer: 0,
     prevState: "idle",
-    currentFile: "Welcome!",
+    currentFile: "Waiting for Copilot...",
     roomHue: 220,
     furnitureType: "default",
     animFrame: 0,
@@ -1061,31 +1056,68 @@ TTTTkddoooooddkTTTT
     facingRight: true,
     particles: [],
     enemies: [],
-    streak: 0,
-    streakTimer: 0,
-    statusText: "\u{1F431} Mona is ready!",
+    statusText: "\u{1F634} Waiting for Copilot...",
     statusTimer: 0,
-    idleTimer: 0,
-    deepIdleTimer: 0,
     shakeTimer: 0,
-    stats: { linesCoded: 0, filesVisited: 0, bugsDefeated: 0, savesMade: 0, copilotAssists: 0, totalXP: 0, level: 1 },
+    stats: { linesWritten: 0, linesDeleted: 0, filesVisited: 0, bugsDefeated: 0, terminalCommands: 0, sessionsCompleted: 0, totalXP: 0, level: 1 },
     levelUpTimer: 0,
     levelUpText: "",
     errorBadge: 0,
     attackCooldown: 0,
     config: { soundEnabled: false, monaSize: 64, showXPBar: true },
-    dustTimer: 0
+    dustTimer: 0,
+    agentState: "IDLE",
+    activityLog: [],
+    fileMap: [],
+    sessionTimer: 0,
+    sessionActive: false,
+    sessionFilesCount: 0,
+    sessionLinesCount: 0,
+    copilotPulse: 0,
+    summaryDisplay: null,
+    summaryTimer: 0
   };
   state.monaX = W / 2 - monaSize / 2;
   state.monaY = H - monaSize - 20;
   state.targetX = state.monaX;
   state.targetY = state.monaY;
+  function addLog(text, color = "#79c0ff") {
+    state.activityLog.push({ text, time: Date.now(), color });
+    if (state.activityLog.length > 12)
+      state.activityLog.shift();
+  }
+  function addFileToMap(filename) {
+    const existing = state.fileMap.find((f) => f.name === filename);
+    if (existing) {
+      existing.visited = true;
+      existing.active = true;
+      existing.lastVisit = Date.now();
+      state.fileMap.forEach((f) => {
+        if (f.name !== filename)
+          f.active = false;
+      });
+      return;
+    }
+    const idx = state.fileMap.length;
+    const cols = Math.max(4, Math.floor(W / 80));
+    const mapAreaX = W - Math.min(200, W * 0.4);
+    const col = idx % cols;
+    const row = Math.floor(idx / cols);
+    state.fileMap.forEach((f) => f.active = false);
+    state.fileMap.push({
+      name: filename,
+      x: mapAreaX + col * 40 + 10,
+      y: 70 + row * 25,
+      visited: true,
+      active: true,
+      lastVisit: Date.now()
+    });
+  }
   function xpForLevel(level) {
     return level * 100 + (level - 1) * 50;
   }
   function addXP(amount) {
     state.stats.totalXP += amount;
-    const needed = xpForLevel(state.stats.level);
     let xpInLevel = state.stats.totalXP;
     let lvl = 1;
     let req = xpForLevel(1);
@@ -1104,13 +1136,12 @@ TTTTkddoooooddkTTTT
     state.stats.level = lvl;
     updateXPBar(xpInLevel, req);
     updateStatsTooltip();
-    postToExtension({ type: "saveStats", stats: state.stats });
+    postMsg({ type: "saveStats", stats: state.stats });
   }
   function updateXPBar(current, needed) {
     if (!xpBarEl)
       return;
-    const pct = Math.min(100, current / needed * 100);
-    xpBarEl.style.width = `${pct}%`;
+    xpBarEl.style.width = `${Math.min(100, current / needed * 100)}%`;
     if (levelEl)
       levelEl.textContent = `Lv.${state.stats.level}`;
   }
@@ -1118,13 +1149,7 @@ TTTTkddoooooddkTTTT
     if (!statsTooltipEl)
       return;
     const s = state.stats;
-    statsTooltipEl.textContent = `Lines: ${s.linesCoded} | Files: ${s.filesVisited} | Bugs: ${s.bugsDefeated} | Saves: ${s.savesMade} | Copilot: ${s.copilotAssists}`;
-  }
-  function postToExtension(msg) {
-    try {
-      window.acquireVsCodeApi?.()?.postMessage?.(msg);
-    } catch {
-    }
+    statsTooltipEl.textContent = `Written: ${s.linesWritten} | Deleted: ${s.linesDeleted} | Files: ${s.filesVisited} | Bugs: ${s.bugsDefeated} | Sessions: ${s.sessionsCompleted}`;
   }
   var vscodeApi = (() => {
     try {
@@ -1133,6 +1158,9 @@ TTTTkddoooooddkTTTT
       return null;
     }
   })();
+  function postMsg(msg) {
+    vscodeApi?.postMessage?.(msg);
+  }
   function hashStr(s) {
     let h = 0;
     for (let i = 0; i < s.length; i++)
@@ -1172,11 +1200,10 @@ TTTTkddoooooddkTTTT
     const ft = state.furnitureType;
     const fSize = monaSize * 0.8;
     const rightX = W - fSize - 20;
-    const bottomY = H - fSize - 10;
     switch (ft) {
       case "code":
         ctx.drawImage(furniture.desk, rightX, 65, fSize, fSize);
-        ctx.drawImage(furniture.coffee, rightX - fSize * 0.4, bottomY, fSize * 0.5, fSize * 0.5);
+        ctx.drawImage(furniture.coffee, rightX - fSize * 0.4, H - fSize * 0.5 - 10, fSize * 0.5, fSize * 0.5);
         break;
       case "data":
         ctx.drawImage(furniture.cabinet, rightX, 65, fSize, fSize);
@@ -1191,6 +1218,141 @@ TTTTkddoooooddkTTTT
         ctx.drawImage(furniture.desk, rightX, 65, fSize, fSize);
         break;
     }
+  }
+  function drawCopilotStatus() {
+    const pulse = Math.sin(state.copilotPulse * 4) * 0.3 + 0.7;
+    let color;
+    let label;
+    switch (state.agentState) {
+      case "COPILOT_ACTIVE":
+        color = `rgba(46, 204, 113, ${pulse})`;
+        label = "\u{1F916} ACTIVE";
+        break;
+      case "COPILOT_IDLE":
+        color = `rgba(241, 196, 15, 0.7)`;
+        label = "\u23F8\uFE0F IDLE";
+        break;
+      default:
+        color = "rgba(160, 160, 192, 0.4)";
+        label = "\u{1F634} WAITING";
+    }
+    ctx.save();
+    ctx.fillStyle = "rgba(13, 13, 26, 0.8)";
+    ctx.fillRect(4, 4, 90, 18);
+    ctx.strokeStyle = color;
+    ctx.lineWidth = 1;
+    ctx.strokeRect(4, 4, 90, 18);
+    ctx.beginPath();
+    ctx.arc(14, 13, 4, 0, Math.PI * 2);
+    ctx.fillStyle = color;
+    ctx.fill();
+    ctx.fillStyle = "#e0e0e8";
+    ctx.font = "bold 9px monospace";
+    ctx.fillText(label, 22, 16);
+    ctx.restore();
+  }
+  function drawActivityLog() {
+    const logW = Math.min(220, W * 0.45);
+    const logH = Math.min(140, H * 0.45);
+    const logX = 4;
+    const logY = H - logH - 4;
+    ctx.save();
+    ctx.fillStyle = "rgba(13, 13, 26, 0.85)";
+    ctx.fillRect(logX, logY, logW, logH);
+    ctx.strokeStyle = "#2d2d5e";
+    ctx.lineWidth = 1;
+    ctx.strokeRect(logX, logY, logW, logH);
+    ctx.fillStyle = "#58a6ff";
+    ctx.font = "bold 8px monospace";
+    ctx.fillText("\u250C\u2500 COPILOT LOG \u2500\u2510", logX + 4, logY + 10);
+    ctx.font = "8px monospace";
+    const maxLines = Math.floor((logH - 18) / 11);
+    const visibleLog = state.activityLog.slice(-maxLines);
+    for (let i = 0; i < visibleLog.length; i++) {
+      const entry = visibleLog[i];
+      const age = (Date.now() - entry.time) / 1e3;
+      ctx.globalAlpha = age < 1 ? 1 : Math.max(0.4, 1 - (age - 1) / 30);
+      ctx.fillStyle = entry.color;
+      const line = entry.text.length > 30 ? entry.text.slice(0, 28) + ".." : entry.text;
+      ctx.fillText(`\u203A ${line}`, logX + 6, logY + 22 + i * 11);
+    }
+    ctx.globalAlpha = 1;
+    ctx.restore();
+  }
+  function drawFileMap() {
+    if (state.fileMap.length === 0)
+      return;
+    const now = Date.now();
+    ctx.save();
+    ctx.font = "7px monospace";
+    for (const node of state.fileMap) {
+      const age = (now - node.lastVisit) / 1e3;
+      const alpha = node.active ? 1 : Math.max(0.3, 1 - age / 60);
+      ctx.globalAlpha = alpha;
+      ctx.fillStyle = node.active ? "#1a3a2e" : "#1a1a2e";
+      ctx.strokeStyle = node.active ? "#2ecc71" : "#3d3d5c";
+      ctx.lineWidth = node.active ? 2 : 1;
+      ctx.fillRect(node.x, node.y, 35, 18);
+      ctx.strokeRect(node.x, node.y, 35, 18);
+      ctx.fillStyle = node.active ? "#2ecc71" : "#7a7a9e";
+      const short = (node.name.split("/").pop() || "?").slice(0, 6);
+      ctx.fillText(short, node.x + 2, node.y + 12);
+    }
+    ctx.globalAlpha = 1;
+    ctx.restore();
+  }
+  function drawProgress() {
+    if (!state.sessionActive)
+      return;
+    ctx.save();
+    ctx.font = "9px monospace";
+    ctx.fillStyle = "#58a6ff";
+    const elapsed = Math.floor(state.sessionTimer);
+    const m = Math.floor(elapsed / 60);
+    const s = elapsed % 60;
+    const timeStr = m > 0 ? `${m}m${s.toString().padStart(2, "0")}s` : `${s}s`;
+    const txt = `\u{1F4C4}${state.sessionFilesCount} \u270F\uFE0F${state.sessionLinesCount} \u23F1${timeStr}`;
+    ctx.fillText(txt, W / 2 - 50, 50);
+    ctx.restore();
+  }
+  function drawSessionSummary() {
+    if (!state.summaryDisplay || state.summaryTimer <= 0)
+      return;
+    const s = state.summaryDisplay;
+    const alpha = Math.min(1, state.summaryTimer / 1);
+    ctx.save();
+    ctx.globalAlpha = alpha;
+    const boxW = Math.min(260, W - 40);
+    const boxH = 130;
+    const boxX = (W - boxW) / 2;
+    const boxY = (H - boxH) / 2 - 20;
+    ctx.fillStyle = "rgba(13, 13, 26, 0.92)";
+    ctx.fillRect(boxX, boxY, boxW, boxH);
+    ctx.strokeStyle = "#f1c40f";
+    ctx.lineWidth = 2;
+    ctx.strokeRect(boxX, boxY, boxW, boxH);
+    ctx.fillStyle = "#f1c40f";
+    ctx.font = "bold 12px monospace";
+    ctx.textAlign = "center";
+    ctx.fillText("\u2728 SESSION COMPLETE \u2728", W / 2, boxY + 20);
+    ctx.font = "9px monospace";
+    ctx.fillStyle = "#e0e0e8";
+    const dur = Math.floor(s.durationMs / 1e3);
+    const dm = Math.floor(dur / 60);
+    const ds = dur % 60;
+    const lines = [
+      `\u{1F4C4} Files visited: ${s.filesVisited.length}`,
+      `\u270F\uFE0F Lines written: ${s.linesWritten}  \u{1F5D1}\uFE0F Deleted: ${s.linesDeleted}`,
+      `\u{1F4BB} Terminal commands: ${s.terminalCommands}`,
+      `\u{1F41B} Errors: ${s.errorsEncountered} found, ${s.errorsFixed} fixed`,
+      `\u23F1\uFE0F Duration: ${dm > 0 ? dm + "m " : ""}${ds}s`
+    ];
+    for (let i = 0; i < lines.length; i++) {
+      ctx.fillText(lines[i], W / 2, boxY + 40 + i * 16);
+    }
+    ctx.textAlign = "left";
+    ctx.globalAlpha = 1;
+    ctx.restore();
   }
   function setState(newState, duration = 0) {
     if (state.state === newState && duration === 0)
@@ -1254,24 +1416,40 @@ TTTTkddoooooddkTTTT
   function spawnCodingParticles() {
     const x = state.monaX + monaSize / 2 + (Math.random() - 0.5) * 20;
     const y = state.monaY + monaSize * 0.6;
-    spawnParticles(x, y, "#3498db", 2);
+    spawnParticles(x, y, "#3498db", 3);
   }
-  function spawnSaveWave() {
+  function spawnConstructionParticles() {
+    const cx = state.monaX + monaSize / 2;
+    const cy = state.monaY;
+    const colors = ["#f1c40f", "#e67e22", "#ecf0f1"];
+    for (let i = 0; i < 12; i++) {
+      state.particles.push({
+        x: cx + (Math.random() - 0.5) * 60,
+        y: cy + Math.random() * monaSize,
+        vx: (Math.random() - 0.5) * 3,
+        vy: -Math.random() * 4 - 1,
+        life: 1,
+        maxLife: 1.2,
+        color: colors[Math.floor(Math.random() * colors.length)],
+        size: 2 + Math.random() * 3,
+        type: "construction"
+      });
+    }
+  }
+  function spawnDemolishParticles() {
     const cx = state.monaX + monaSize / 2;
     const cy = state.monaY + monaSize / 2;
-    for (let i = 0; i < 16; i++) {
-      const angle = i / 16 * Math.PI * 2;
+    for (let i = 0; i < 10; i++) {
       state.particles.push({
-        x: cx,
-        y: cy,
-        vx: Math.cos(angle) * 3,
-        vy: Math.sin(angle) * 3,
+        x: cx + (Math.random() - 0.5) * 40,
+        y: cy + (Math.random() - 0.5) * 20,
+        vx: (Math.random() - 0.5) * 5,
+        vy: Math.random() * 3 + 1,
         life: 1,
         maxLife: 0.8,
-        color: "#f1c40f",
-        size: 3,
-        type: "ring",
-        angle
+        color: "#e74c3c",
+        size: 2 + Math.random() * 3,
+        type: "normal"
       });
     }
   }
@@ -1363,50 +1541,103 @@ TTTTkddoooooddkTTTT
     });
   }
   function handleEvent(ev) {
-    state.idleTimer = 0;
-    state.deepIdleTimer = 0;
     switch (ev.type) {
-      case "init":
-        setStatus("\u{1F431} Mona is ready to code!");
-        if (ev.config)
-          applyConfig(ev.config);
+      case "agentStateChange": {
+        state.agentState = ev.agentState || "IDLE";
+        if (state.agentState === "COPILOT_ACTIVE") {
+          state.sessionActive = true;
+          state.sessionTimer = 0;
+          state.sessionFilesCount = 0;
+          state.sessionLinesCount = 0;
+          state.summaryDisplay = null;
+          state.summaryTimer = 0;
+          setState("idle");
+          setStatus("\u{1F916} Copilot is working...");
+          addLog("Agent started working", "#2ecc71");
+        } else if (state.agentState === "COPILOT_IDLE") {
+          setState("idle");
+          setStatus("\u23F8\uFE0F Copilot paused...");
+          addLog("Agent paused", "#f1c40f");
+        } else if (state.agentState === "IDLE") {
+          state.sessionActive = false;
+          if (state.state !== "celebrate") {
+            setState("sleep");
+            setStatus("\u{1F634} Waiting for Copilot...");
+          }
+        }
         break;
-      case "configUpdate":
-        if (ev.config)
-          applyConfig(ev.config);
-        break;
-      case "fileOpen":
-        state.currentFile = ev.file || "unknown";
-        state.roomHue = hashStr(state.currentFile) % 360;
-        state.furnitureType = getFurnitureType(state.currentFile);
+      }
+      case "agentFileOpen": {
+        const file = ev.file || "unknown";
+        state.currentFile = file;
+        state.roomHue = hashStr(file) % 360;
+        state.furnitureType = getFurnitureType(file);
         state.targetX = W / 2 - monaSize / 2 + (Math.random() - 0.5) * 80;
         setState("walk");
         state.stats.filesVisited++;
+        state.sessionFilesCount++;
         addXP(5);
-        setStatus(`\u{1F4C2} Entering ${state.currentFile.split("/").pop()}`);
+        addLog(`Reading ${file.split("/").pop()}...`, "#58a6ff");
+        addFileToMap(file);
+        setStatus(`\u{1F4C2} Reading ${file.split("/").pop()}`);
         break;
-      case "fileChange":
-        state.streak++;
-        state.streakTimer = 3;
-        state.stats.linesCoded++;
-        addXP(1);
+      }
+      case "agentFileEdit": {
+        const file = ev.file || "unknown";
+        const lines = ev.linesChanged || 1;
+        if (file !== state.currentFile) {
+          state.currentFile = file;
+          state.roomHue = hashStr(file) % 360;
+          state.furnitureType = getFurnitureType(file);
+          addFileToMap(file);
+          state.sessionFilesCount++;
+        }
+        state.stats.linesWritten += lines;
+        state.sessionLinesCount += lines;
+        addXP(2 * lines);
         setState("code", 2);
         spawnCodingParticles();
         sfxType();
-        setStatus(`\u2328\uFE0F Coding... (${state.streak}x streak!)`);
+        addLog(`Editing ${file.split("/").pop()} (+${lines} lines)`, "#79c0ff");
+        setStatus(`\u2328\uFE0F Editing ${file.split("/").pop()}...`);
         break;
-      case "fileSave":
-        state.stats.savesMade++;
-        addXP(10);
-        spawnSaveWave();
-        sfxSave();
-        setStatus("\u{1F4BE} Checkpoint saved!");
+      }
+      case "agentFileCreate": {
+        const file = ev.file || "unknown";
+        state.currentFile = file;
+        state.roomHue = hashStr(file) % 360;
+        state.furnitureType = getFurnitureType(file);
+        state.stats.filesVisited++;
+        state.sessionFilesCount++;
+        addXP(15);
+        setState("celebrate", 1.5);
+        spawnConstructionParticles();
+        sfxCopilot();
+        addLog(`Created ${file.split("/").pop()}`, "#2ecc71");
+        addFileToMap(file);
+        setStatus(`\u{1F3D7}\uFE0F Building ${file.split("/").pop()}`);
         break;
-      case "terminal":
+      }
+      case "agentCodeDelete": {
+        const file = ev.file || "unknown";
+        const lines = ev.linesDeleted || 1;
+        state.stats.linesDeleted += lines;
+        addXP(1);
+        setState("code", 1.5);
+        spawnDemolishParticles();
+        addLog(`Deleting from ${file.split("/").pop()} (-${lines})`, "#e74c3c");
+        setStatus(`\u{1F5D1}\uFE0F Removing code...`);
+        break;
+      }
+      case "agentTerminal": {
+        state.stats.terminalCommands++;
+        addXP(8);
         setState("spell", 2);
         spawnTerminalCircle();
-        setStatus("\u{1F52E} Casting terminal spell...");
+        addLog("Running terminal command...", "#9b59b6");
+        setStatus("\u{1F52E} Running command...");
         break;
+      }
       case "errorsAppear": {
         const count = ev.errorCount || 1;
         state.errorBadge += count;
@@ -1416,6 +1647,7 @@ TTTTkddoooooddkTTTT
         state.shakeTimer = 0.4;
         sfxError();
         spawnParticles(W / 2, H / 2, "#e74c3c", 6);
+        addLog(`${count} error${count > 1 ? "s" : ""} appeared!`, "#e74c3c");
         setStatus(`\u2694\uFE0F ${count} bug${count > 1 ? "s" : ""} appeared!`);
         break;
       }
@@ -1424,10 +1656,11 @@ TTTTkddoooooddkTTTT
         for (let i = 0; i < Math.min(count, 2); i++)
           spawnEnemy(true);
         setState("fight", 3);
-        setStatus(`\u26A0\uFE0F ${count} warning${count > 1 ? "s" : ""} appeared!`);
+        addLog(`${count} warning${count > 1 ? "s" : ""} appeared`, "#f1c40f");
+        setStatus(`\u26A0\uFE0F ${count} warning${count > 1 ? "s" : ""}`);
         break;
       }
-      case "errorsCleared":
+      case "errorsCleared": {
         state.enemies.forEach((e) => {
           e.dying = true;
           e.dyingTimer = 0.5;
@@ -1438,21 +1671,46 @@ TTTTkddoooooddkTTTT
         setState("celebrate", 2);
         spawnConfetti();
         addXP(25);
+        addLog("All errors fixed! \u{1F389}", "#2ecc71");
         setStatus("\u{1F389} All bugs defeated!");
         break;
-      case "copilotAssist":
-        state.stats.copilotAssists++;
-        addXP(15);
-        spawnCopilotSparkles();
-        sfxCopilot();
-        setStatus("\u2728 Copilot assisted!");
-        break;
-      case "idle":
-        if (state.state !== "fight") {
-          setState("idle");
-          setStatus("\u{1F60A} Mona is waiting...");
+      }
+      case "sessionSummary": {
+        if (ev.summary) {
+          state.summaryDisplay = ev.summary;
+          state.summaryTimer = 8;
+          state.stats.sessionsCompleted++;
+          setState("celebrate", 3);
+          spawnConfetti();
+          spawnCopilotSparkles();
+          addXP(30);
+          addLog("Session complete!", "#f1c40f");
+          setStatus("\u2728 Copilot session complete!");
         }
         break;
+      }
+      case "configUpdate": {
+        if (ev.config)
+          applyConfig(ev.config);
+        break;
+      }
+      case "loadStats": {
+        if (ev.stats) {
+          Object.assign(state.stats, ev.stats);
+          let xpInLevel = state.stats.totalXP;
+          let lvl = 1;
+          let req = xpForLevel(1);
+          while (xpInLevel >= req) {
+            xpInLevel -= req;
+            lvl++;
+            req = xpForLevel(lvl);
+          }
+          state.stats.level = lvl;
+          updateXPBar(xpInLevel, req);
+          updateStatsTooltip();
+        }
+        break;
+      }
     }
   }
   function applyConfig(config) {
@@ -1475,18 +1733,23 @@ TTTTkddoooooddkTTTT
   }
   var lastTime = 0;
   function update(dt) {
+    state.copilotPulse += dt;
+    if (state.sessionActive) {
+      state.sessionTimer += dt;
+    }
+    if (state.summaryTimer > 0) {
+      state.summaryTimer -= dt;
+      if (state.summaryTimer <= 0)
+        state.summaryDisplay = null;
+    }
     if (state.stateTimer > 0) {
       state.stateTimer -= dt;
-      if (state.stateTimer <= 0 && state.state !== "sleep") {
-        setState("idle");
-      }
-    }
-    state.idleTimer += dt;
-    if (state.state === "idle") {
-      state.deepIdleTimer += dt;
-      if (state.deepIdleTimer > 30) {
-        setState("sleep");
-        setStatus("\u{1F634} Mona is napping... ZZZ");
+      if (state.stateTimer <= 0) {
+        if (state.agentState === "COPILOT_ACTIVE") {
+          setState("idle");
+        } else if (state.state !== "sleep") {
+          setState(state.agentState === "IDLE" ? "sleep" : "idle");
+        }
       }
     }
     if (state.state === "walk") {
@@ -1547,15 +1810,13 @@ TTTTkddoooooddkTTTT
       const enemy = state.enemies[i];
       if (enemy.dying) {
         enemy.dyingTimer -= dt;
-        if (enemy.dyingTimer <= 0) {
+        if (enemy.dyingTimer <= 0)
           state.enemies.splice(i, 1);
-        }
         continue;
       }
       const dx = state.monaX + monaSize / 2 - enemy.x;
-      if (Math.abs(dx) > 40) {
+      if (Math.abs(dx) > 40)
         enemy.x += Math.sign(dx) * enemy.speed * dt;
-      }
       if (enemy.knockbackVx !== 0) {
         enemy.x += enemy.knockbackVx * dt;
         enemy.knockbackVx *= 0.9;
@@ -1568,9 +1829,6 @@ TTTTkddoooooddkTTTT
     }
     if (state.state === "fight" && state.enemies.filter((e) => !e.dying).length === 0) {
       setState("idle");
-      if (state.enemies.length === 0) {
-        setStatus("\u{1F60A} All clear!");
-      }
     }
     state.dustTimer += dt;
     if (state.dustTimer > 2) {
@@ -1590,11 +1848,6 @@ TTTTkddoooooddkTTTT
       p.life -= dt / p.maxLife;
       if (p.life <= 0)
         state.particles.splice(i, 1);
-    }
-    if (state.streakTimer > 0) {
-      state.streakTimer -= dt;
-    } else if (state.streak > 0 && state.idleTimer > 3) {
-      state.streak = Math.max(0, state.streak - 1);
     }
     if (state.shakeTimer > 0)
       state.shakeTimer -= dt;
@@ -1683,15 +1936,20 @@ TTTTkddoooooddkTTTT
       ctx.fillStyle = "#f1c40f";
       ctx.font = "bold 24px monospace";
       ctx.textAlign = "center";
-      const yOff = (2.5 - state.levelUpTimer) * 20;
-      ctx.fillText(state.levelUpText, W / 2, H / 2 - yOff);
+      ctx.fillText(state.levelUpText, W / 2, H / 2 - (2.5 - state.levelUpTimer) * 20);
       ctx.textAlign = "left";
       ctx.restore();
     }
     ctx.restore();
+    drawCopilotStatus();
+    drawActivityLog();
+    drawFileMap();
+    drawProgress();
+    drawSessionSummary();
+    const agentLabel = state.agentState === "COPILOT_ACTIVE" ? "\u{1F916} Copilot Working..." : state.agentState === "COPILOT_IDLE" ? "\u23F8\uFE0F Copilot Paused" : "\u{1F634} Waiting for Copilot";
     fileEl.textContent = `\u{1F4C1} ${(state.currentFile || "No file").split("/").pop()}`;
     statusEl.textContent = state.statusText;
-    streakEl.textContent = state.streak > 0 ? `\u{1F525} ${state.streak}x` : "";
+    streakEl.textContent = state.sessionActive ? `\u{1F4C4}${state.sessionFilesCount} \u270F\uFE0F${state.sessionLinesCount}` : agentLabel;
   }
   function gameLoop(time) {
     const dt = Math.min((time - lastTime) / 1e3, 0.1);
@@ -1701,23 +1959,7 @@ TTTTkddoooooddkTTTT
     requestAnimationFrame(gameLoop);
   }
   window.addEventListener("message", (e) => {
-    const data = e.data;
-    if (data.type === "loadStats") {
-      Object.assign(state.stats, data.stats);
-      let xpInLevel = state.stats.totalXP;
-      let lvl = 1;
-      let req = xpForLevel(1);
-      while (xpInLevel >= req) {
-        xpInLevel -= req;
-        lvl++;
-        req = xpForLevel(lvl);
-      }
-      state.stats.level = lvl;
-      updateXPBar(xpInLevel, req);
-      updateStatsTooltip();
-    } else {
-      handleEvent(data);
-    }
+    handleEvent(e.data);
   });
   lastTime = performance.now();
   requestAnimationFrame(gameLoop);

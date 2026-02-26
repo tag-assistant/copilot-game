@@ -40,46 +40,186 @@ var vscode2 = __toESM(require("vscode"));
 var vscode = __toESM(require("vscode"));
 function createEventListeners(panel, context) {
   const disposables = [];
-  let idleTimeout;
+  let lastUserCursorMove = 0;
+  let lastUserFocusedDoc;
+  let lastActiveEditorUri;
+  let agentState = "IDLE";
+  let lastAgentSignal = 0;
+  let agentIdleTimeout;
+  let fullIdleTimeout;
+  let sessionStart = 0;
+  const sessionFiles = /* @__PURE__ */ new Set();
+  let sessionLinesWritten = 0;
+  let sessionLinesDeleted = 0;
+  let sessionTerminalCmds = 0;
+  let sessionErrorsEncountered = 0;
+  let sessionErrorsFixed = 0;
+  let recentEditFiles = [];
   let lastErrorCount = 0;
   let lastWarningCount = 0;
   function post(event) {
     panel.webview.postMessage(event);
-    if (idleTimeout)
-      clearTimeout(idleTimeout);
-    if (event.type !== "idle") {
-      idleTimeout = setTimeout(() => post({ type: "idle" }), 5e3);
+  }
+  function setAgentState(newState) {
+    if (newState === agentState)
+      return;
+    const prev = agentState;
+    agentState = newState;
+    if (newState === "COPILOT_ACTIVE" && prev === "IDLE") {
+      sessionStart = Date.now();
+      sessionFiles.clear();
+      sessionLinesWritten = 0;
+      sessionLinesDeleted = 0;
+      sessionTerminalCmds = 0;
+      sessionErrorsEncountered = 0;
+      sessionErrorsFixed = 0;
+    }
+    if (newState === "IDLE" && (prev === "COPILOT_IDLE" || prev === "COPILOT_ACTIVE")) {
+      if (sessionFiles.size > 0) {
+        post({
+          type: "sessionSummary",
+          summary: {
+            filesVisited: [...sessionFiles],
+            linesWritten: sessionLinesWritten,
+            linesDeleted: sessionLinesDeleted,
+            terminalCommands: sessionTerminalCmds,
+            errorsEncountered: sessionErrorsEncountered,
+            errorsFixed: sessionErrorsFixed,
+            durationMs: Date.now() - sessionStart
+          }
+        });
+      }
+    }
+    post({ type: "agentStateChange", agentState: newState });
+    resetTimers();
+  }
+  function resetTimers() {
+    if (agentIdleTimeout)
+      clearTimeout(agentIdleTimeout);
+    if (fullIdleTimeout)
+      clearTimeout(fullIdleTimeout);
+    if (agentState === "COPILOT_ACTIVE") {
+      agentIdleTimeout = setTimeout(() => setAgentState("COPILOT_IDLE"), 5e3);
+    } else if (agentState === "COPILOT_IDLE") {
+      fullIdleTimeout = setTimeout(() => setAgentState("IDLE"), 15e3);
     }
   }
+  function signalAgent() {
+    lastAgentSignal = Date.now();
+    if (agentState === "IDLE" || agentState === "COPILOT_IDLE") {
+      setAgentState("COPILOT_ACTIVE");
+    } else if (agentState === "COPILOT_ACTIVE") {
+      resetTimers();
+    }
+  }
+  function isUserActive() {
+    return Date.now() - lastUserCursorMove < 500;
+  }
+  disposables.push(
+    vscode.window.onDidChangeTextEditorSelection((e) => {
+      lastUserCursorMove = Date.now();
+      lastUserFocusedDoc = e.textEditor.document.uri.toString();
+    })
+  );
   disposables.push(
     vscode.window.onDidChangeActiveTextEditor((editor) => {
       if (editor) {
-        post({ type: "fileOpen", file: vscode.workspace.asRelativePath(editor.document.uri) });
+        lastActiveEditorUri = editor.document.uri.toString();
       }
     })
   );
-  let changeDebounce;
   disposables.push(
     vscode.workspace.onDidChangeTextDocument((e) => {
       if (e.contentChanges.length === 0)
         return;
-      if (changeDebounce)
-        clearTimeout(changeDebounce);
-      changeDebounce = setTimeout(() => {
-        post({ type: "fileChange", file: vscode.workspace.asRelativePath(e.document.uri) });
+      if (e.document.uri.scheme !== "file")
+        return;
+      const docUri = e.document.uri.toString();
+      const relPath = vscode.workspace.asRelativePath(e.document.uri);
+      const now = Date.now();
+      let totalInserted = 0;
+      let totalDeleted = 0;
+      let linesInserted = 0;
+      let linesRemoved = 0;
+      for (const change of e.contentChanges) {
+        totalInserted += change.text.length;
+        totalDeleted += change.rangeLength;
+        linesInserted += (change.text.match(/\n/g) || []).length;
+        linesRemoved += change.range.end.line - change.range.start.line;
+      }
+      const isBackgroundEdit = docUri !== lastActiveEditorUri;
+      const isLargeBlock = totalInserted > 20;
+      const isCursorInactive = now - lastUserCursorMove > 300;
+      const isNotUserTyping = !isUserActive() || isBackgroundEdit;
+      recentEditFiles.push({ uri: docUri, time: now });
+      recentEditFiles = recentEditFiles.filter((f) => now - f.time < 2e3);
+      const uniqueRecentFiles = new Set(recentEditFiles.map((f) => f.uri)).size;
+      const isMultiFileRapid = uniqueRecentFiles >= 2;
+      let agentScore = 0;
+      if (isBackgroundEdit)
+        agentScore += 3;
+      if (isLargeBlock)
+        agentScore += 2;
+      if (isCursorInactive)
+        agentScore += 1;
+      if (isMultiFileRapid)
+        agentScore += 2;
+      if (agentScore >= 2 && isNotUserTyping) {
+        signalAgent();
+        sessionFiles.add(relPath);
+        if (totalDeleted > totalInserted && totalDeleted > 10) {
+          sessionLinesDeleted += Math.max(1, linesRemoved);
+          post({ type: "agentCodeDelete", file: relPath, linesDeleted: Math.max(1, linesRemoved) });
+        } else {
+          sessionLinesWritten += Math.max(1, linesInserted);
+          post({ type: "agentFileEdit", file: relPath, linesChanged: Math.max(1, linesInserted) });
+        }
+      }
+    })
+  );
+  disposables.push(
+    vscode.workspace.onDidOpenTextDocument((doc) => {
+      if (doc.uri.scheme !== "file")
+        return;
+      const docUri = doc.uri.toString();
+      setTimeout(() => {
+        if (docUri !== lastActiveEditorUri) {
+          const relPath = vscode.workspace.asRelativePath(doc.uri);
+          signalAgent();
+          sessionFiles.add(relPath);
+          post({ type: "agentFileOpen", file: relPath });
+        }
       }, 100);
     })
   );
   disposables.push(
-    vscode.workspace.onDidSaveTextDocument((doc) => {
-      post({ type: "fileSave", file: vscode.workspace.asRelativePath(doc.uri) });
+    vscode.workspace.onDidCreateFiles((e) => {
+      for (const file of e.files) {
+        const relPath = vscode.workspace.asRelativePath(file);
+        signalAgent();
+        sessionFiles.add(relPath);
+        post({ type: "agentFileCreate", file: relPath });
+      }
     })
   );
   disposables.push(
-    vscode.window.onDidOpenTerminal(() => post({ type: "terminal" }))
+    vscode.window.onDidOpenTerminal(() => {
+      const activeTerminal = vscode.window.activeTerminal;
+      if (!activeTerminal) {
+        signalAgent();
+        sessionTerminalCmds++;
+        post({ type: "agentTerminal" });
+      }
+    })
   );
   disposables.push(
-    vscode.window.onDidChangeActiveTerminal(() => post({ type: "terminal" }))
+    vscode.window.onDidChangeActiveTerminal(() => {
+      if (!isUserActive()) {
+        signalAgent();
+        sessionTerminalCmds++;
+        post({ type: "agentTerminal" });
+      }
+    })
   );
   disposables.push(
     vscode.languages.onDidChangeDiagnostics(() => {
@@ -95,8 +235,11 @@ function createEventListeners(panel, context) {
         }
       }
       if (errorCount > lastErrorCount) {
-        post({ type: "errorsAppear", errorCount: errorCount - lastErrorCount });
+        const newErrors = errorCount - lastErrorCount;
+        sessionErrorsEncountered += newErrors;
+        post({ type: "errorsAppear", errorCount: newErrors });
       } else if (errorCount < lastErrorCount && errorCount === 0) {
+        sessionErrorsFixed += lastErrorCount;
         post({ type: "errorsCleared" });
       }
       if (warningCount > lastWarningCount) {
@@ -106,28 +249,22 @@ function createEventListeners(panel, context) {
       lastWarningCount = warningCount;
     })
   );
-  try {
-    disposables.push(
-      vscode.commands.registerCommand("copilotGame.internalCopilotDetect", () => {
-        post({ type: "copilotAssist" });
-      })
-    );
-  } catch {
-  }
-  panel.webview.onDidReceiveMessage((msg) => {
-    if (msg.type === "saveStats") {
-      context.globalState.update("copilotGame.stats", msg.stats);
-    }
-  }, void 0, disposables);
+  panel.webview.onDidReceiveMessage(
+    (msg) => {
+      if (msg.type === "saveStats") {
+        context.globalState.update("copilotGame.stats", msg.stats);
+      }
+    },
+    void 0,
+    disposables
+  );
   const savedStats = context.globalState.get("copilotGame.stats");
   if (savedStats) {
-    setTimeout(() => {
-      panel.webview.postMessage({ type: "loadStats", stats: savedStats });
-    }, 600);
+    setTimeout(() => panel.webview.postMessage({ type: "loadStats", stats: savedStats }), 600);
   }
   setTimeout(() => {
     const config = vscode.workspace.getConfiguration("copilotGame");
-    panel.webview.postMessage({
+    post({
       type: "configUpdate",
       config: {
         soundEnabled: config.get("soundEnabled", false),
@@ -140,7 +277,7 @@ function createEventListeners(panel, context) {
     vscode.workspace.onDidChangeConfiguration((e) => {
       if (e.affectsConfiguration("copilotGame")) {
         const config = vscode.workspace.getConfiguration("copilotGame");
-        panel.webview.postMessage({
+        post({
           type: "configUpdate",
           config: {
             soundEnabled: config.get("soundEnabled", false),
@@ -151,7 +288,7 @@ function createEventListeners(panel, context) {
       }
     })
   );
-  idleTimeout = setTimeout(() => post({ type: "idle" }), 5e3);
+  post({ type: "agentStateChange", agentState: "IDLE" });
   return disposables;
 }
 
@@ -161,7 +298,7 @@ var statusBarItem;
 function activate(context) {
   statusBarItem = vscode2.window.createStatusBarItem(vscode2.StatusBarAlignment.Right, 100);
   statusBarItem.text = "$(smiley) Mona";
-  statusBarItem.tooltip = "Click to open Copilot Game";
+  statusBarItem.tooltip = "Open Copilot Game \u2014 Watch Copilot work!";
   statusBarItem.command = "copilotGame.open";
   statusBarItem.show();
   context.subscriptions.push(statusBarItem);
@@ -170,10 +307,9 @@ function activate(context) {
       currentPanel.reveal();
       return;
     }
-    const config2 = vscode2.workspace.getConfiguration("copilotGame");
     const panel = vscode2.window.createWebviewPanel(
       "copilotGame",
-      "\u{1F431} Mona's Adventure",
+      "\u{1F431} Mona \u2014 Copilot Visualizer",
       vscode2.ViewColumn.Beside,
       { enableScripts: true, retainContextWhenHidden: true }
     );
@@ -187,36 +323,12 @@ function activate(context) {
     });
     context.subscriptions.push(...listeners);
     statusBarItem.text = "$(smiley) Mona \u{1F3AE}";
-    setTimeout(() => {
-      const editor = vscode2.window.activeTextEditor;
-      if (editor) {
-        panel.webview.postMessage({
-          type: "fileOpen",
-          file: vscode2.workspace.asRelativePath(editor.document.uri)
-        });
-      }
-    }, 500);
   });
   context.subscriptions.push(openCmd);
   const config = vscode2.workspace.getConfiguration("copilotGame");
   if (config.get("autoOpen", false)) {
     vscode2.commands.executeCommand("copilotGame.open");
   }
-  let lastEdit = 0;
-  context.subscriptions.push(
-    vscode2.workspace.onDidChangeTextDocument((e) => {
-      if (!currentPanel)
-        return;
-      const now = Date.now();
-      for (const change of e.contentChanges) {
-        if (change.text.length > 20 && now - lastEdit > 200) {
-          currentPanel.webview.postMessage({ type: "copilotAssist" });
-          break;
-        }
-      }
-      lastEdit = now;
-    })
-  );
 }
 function getWebviewContent(webview, context) {
   const nonce = getNonce();
@@ -283,7 +395,7 @@ function getWebviewContent(webview, context) {
     }
     #file { color: #3498db; flex-shrink: 1; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
     #status { color: #a0a0c0; flex: 1; text-align: center; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
-    #streak { color: #f39c12; font-weight: bold; min-width: 50px; text-align: right; }
+    #streak { color: #58a6ff; font-weight: bold; min-width: 80px; text-align: right; font-size: 10px; }
     #stats-tooltip {
       color: #7a7a9e;
       font-size: 9px;
@@ -306,10 +418,10 @@ function getWebviewContent(webview, context) {
     <div id="xp-bar"><div id="xp-bar-fill"></div></div>
     <canvas id="game"></canvas>
     <div id="hud">
-      <span id="state-icon">\u{1F60A}</span>
+      <span id="state-icon">\u{1F634}</span>
       <span id="level">Lv.1</span>
       <span id="file">\u{1F4C1} Ready</span>
-      <span id="status">\u{1F431} Mona is ready!</span>
+      <span id="status">\u{1F634} Waiting for Copilot...</span>
       <span id="streak"></span>
       <div id="stats-tooltip"></div>
     </div>
