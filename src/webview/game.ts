@@ -8,6 +8,8 @@ import { setSoundEnabled, sfxType, sfxSave, sfxError, sfxBugDefeated, sfxLevelUp
 // ===== Types =====
 type AgentState = 'IDLE' | 'COPILOT_ACTIVE' | 'COPILOT_IDLE' | 'USER_ACTIVE';
 
+type DetectionMode = 'log' | 'heuristic';
+
 interface GameEvent {
   type: string;
   agentState?: AgentState;
@@ -19,6 +21,9 @@ interface GameEvent {
   config?: GameConfig;
   summary?: SessionSummary;
   stats?: any;
+  detectionMode?: DetectionMode;
+  toolName?: string;
+  toolArgs?: string;
 }
 
 interface SessionSummary {
@@ -122,6 +127,7 @@ interface GameState {
   copilotPulse: number; // for pulsing indicator
   summaryDisplay: SessionSummary | null;
   summaryTimer: number;
+  detectionMode: DetectionMode;
 }
 
 // ===== Canvas Setup =====
@@ -195,6 +201,7 @@ const state: GameState = {
   copilotPulse: 0,
   summaryDisplay: null,
   summaryTimer: 0,
+  detectionMode: 'heuristic' as DetectionMode,
 };
 
 state.monaX = W / 2 - monaSize / 2;
@@ -365,13 +372,16 @@ function drawCopilotStatus() {
       label = '😴 WAITING';
   }
 
+  const modeIcon = state.detectionMode === 'log' ? '📡' : '🔍';
+  const modeLabel = state.detectionMode === 'log' ? 'Log' : 'Heuristic';
+
   // Badge top-left
   ctx.save();
   ctx.fillStyle = 'rgba(13, 13, 26, 0.8)';
-  ctx.fillRect(4, 4, 90, 18);
+  ctx.fillRect(4, 4, 130, 18);
   ctx.strokeStyle = color;
   ctx.lineWidth = 1;
-  ctx.strokeRect(4, 4, 90, 18);
+  ctx.strokeRect(4, 4, 130, 18);
 
   // Pulsing dot
   ctx.beginPath();
@@ -382,6 +392,12 @@ function drawCopilotStatus() {
   ctx.fillStyle = '#e0e0e8';
   ctx.font = 'bold 9px monospace';
   ctx.fillText(label, 22, 16);
+
+  // Detection mode indicator
+  ctx.fillStyle = state.detectionMode === 'log' ? '#58a6ff' : '#f1c40f';
+  ctx.font = '8px monospace';
+  ctx.fillText(`${modeIcon}${modeLabel}`, 90, 16);
+
   ctx.restore();
 }
 
@@ -782,6 +798,96 @@ function handleEvent(ev: GameEvent) {
       spawnDemolishParticles();
       addLog(`Deleting from ${file.split('/').pop()} (-${lines})`, '#e74c3c');
       setStatus(`🗑️ Removing code...`);
+      break;
+    }
+
+    case 'agentFileDelete': {
+      const file = ev.file || 'unknown';
+      addXP(5);
+      setState('code', 1.5);
+      spawnDemolishParticles();
+      addLog(`Deleted ${file.split('/').pop()}`, '#e74c3c');
+      setStatus(`💥 Demolished ${file.split('/').pop()}`);
+      break;
+    }
+
+    case 'agentSearch': {
+      const query = ev.toolArgs || 'code';
+      const file = ev.file;
+      addXP(3);
+      setState('walk', 1);
+      state.targetX = state.monaX + (Math.random() - 0.5) * 120;
+      spawnParticles(state.monaX + monaSize / 2, state.monaY + monaSize / 2, '#58a6ff', 5);
+      const logText = file
+        ? `Searching ${file.split('/').pop()} for "${query}"`
+        : `Searching for "${query}"`;
+      addLog(logText.slice(0, 40), '#58a6ff');
+      setStatus(`🔎 Searching: ${query.slice(0, 20)}...`);
+      break;
+    }
+
+    case 'agentErrorCheck': {
+      addXP(3);
+      setState('idle', 1.5);
+      spawnParticles(state.monaX + monaSize / 2, state.monaY, '#f39c12', 4);
+      addLog('Checking for errors...', '#f39c12');
+      setStatus('🔬 Inspecting diagnostics...');
+      break;
+    }
+
+    case 'agentPatch': {
+      const file = ev.file || 'unknown';
+      addXP(10);
+      setState('code', 2);
+      spawnCodingParticles();
+      spawnConstructionParticles();
+      sfxCopilot();
+      addLog(`Applying patch to ${file.split('/').pop()}`, '#e67e22');
+      setStatus(`🔧 Patching ${file.split('/').pop()}`);
+      break;
+    }
+
+    case 'toolCall': {
+      // Raw tool call from log tailing — just update activity log
+      const tool = ev.toolName || 'unknown';
+      const args = ev.toolArgs;
+      let logText: string;
+      let logColor = '#79c0ff';
+      if (tool.includes('read') || tool.includes('list')) {
+        logText = args ? `Reading ${args.split('/').pop()}...` : `Reading file...`;
+        logColor = '#58a6ff';
+      } else if (tool.includes('edit') || tool.includes('insert') || tool.includes('replace')) {
+        logText = args ? `Editing ${args.split('/').pop()}...` : `Editing code...`;
+        logColor = '#79c0ff';
+      } else if (tool.includes('Terminal') || tool.includes('terminal')) {
+        logText = args ? `Running: ${args.slice(0, 30)}` : `Running command...`;
+        logColor = '#9b59b6';
+      } else if (tool.includes('search') || tool.includes('grep')) {
+        logText = args ? `Searching: "${args.slice(0, 25)}"` : `Searching...`;
+        logColor = '#58a6ff';
+      } else if (tool.includes('create') || tool.includes('Create')) {
+        logText = args ? `Creating ${args.split('/').pop()}` : `Creating file...`;
+        logColor = '#2ecc71';
+      } else if (tool.includes('delete') || tool.includes('Delete')) {
+        logText = args ? `Deleting ${args.split('/').pop()}` : `Deleting...`;
+        logColor = '#e74c3c';
+      } else if (tool.includes('error') || tool.includes('Error') || tool.includes('diagnostic')) {
+        logText = `Checking diagnostics...`;
+        logColor = '#f39c12';
+      } else if (tool.includes('patch') || tool.includes('Patch')) {
+        logText = args ? `Patching ${args.split('/').pop()}` : `Applying patch...`;
+        logColor = '#e67e22';
+      } else {
+        logText = `Tool: ${tool}`;
+      }
+      addLog(logText, logColor);
+      break;
+    }
+
+    case 'detectionMode': {
+      state.detectionMode = ev.detectionMode || 'heuristic';
+      const modeLabel = state.detectionMode === 'log' ? '📡 Log Mode' : '🔍 Heuristic Mode';
+      addLog(`Detection: ${modeLabel}`, state.detectionMode === 'log' ? '#58a6ff' : '#f1c40f');
       break;
     }
 

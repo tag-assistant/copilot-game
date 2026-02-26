@@ -2,7 +2,7 @@
   "name": "copilot-game",
   "displayName": "Copilot Game - Agent Visualizer",
   "description": "Watch Copilot work as a pixel art adventure! Mona the cat-topus visualizes what Copilot agent mode is doing — reading files, writing code, running commands, and fighting bugs.",
-  "version": "0.3.0",
+  "version": "0.4.0",
   "publisher": "tag-assistant",
   "license": "MIT",
   "engines": {

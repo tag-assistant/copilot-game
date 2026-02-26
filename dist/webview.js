@@ -1075,7 +1075,8 @@ TTTTkddoooooddkTTTT
     sessionLinesCount: 0,
     copilotPulse: 0,
     summaryDisplay: null,
-    summaryTimer: 0
+    summaryTimer: 0,
+    detectionMode: "heuristic"
   };
   state.monaX = W / 2 - monaSize / 2;
   state.monaY = H - monaSize - 20;
@@ -1236,12 +1237,14 @@ TTTTkddoooooddkTTTT
         color = "rgba(160, 160, 192, 0.4)";
         label = "\u{1F634} WAITING";
     }
+    const modeIcon = state.detectionMode === "log" ? "\u{1F4E1}" : "\u{1F50D}";
+    const modeLabel = state.detectionMode === "log" ? "Log" : "Heuristic";
     ctx.save();
     ctx.fillStyle = "rgba(13, 13, 26, 0.8)";
-    ctx.fillRect(4, 4, 90, 18);
+    ctx.fillRect(4, 4, 130, 18);
     ctx.strokeStyle = color;
     ctx.lineWidth = 1;
-    ctx.strokeRect(4, 4, 90, 18);
+    ctx.strokeRect(4, 4, 130, 18);
     ctx.beginPath();
     ctx.arc(14, 13, 4, 0, Math.PI * 2);
     ctx.fillStyle = color;
@@ -1249,6 +1252,9 @@ TTTTkddoooooddkTTTT
     ctx.fillStyle = "#e0e0e8";
     ctx.font = "bold 9px monospace";
     ctx.fillText(label, 22, 16);
+    ctx.fillStyle = state.detectionMode === "log" ? "#58a6ff" : "#f1c40f";
+    ctx.font = "8px monospace";
+    ctx.fillText(`${modeIcon}${modeLabel}`, 90, 16);
     ctx.restore();
   }
   function drawActivityLog() {
@@ -1627,6 +1633,87 @@ TTTTkddoooooddkTTTT
         spawnDemolishParticles();
         addLog(`Deleting from ${file.split("/").pop()} (-${lines})`, "#e74c3c");
         setStatus(`\u{1F5D1}\uFE0F Removing code...`);
+        break;
+      }
+      case "agentFileDelete": {
+        const file = ev.file || "unknown";
+        addXP(5);
+        setState("code", 1.5);
+        spawnDemolishParticles();
+        addLog(`Deleted ${file.split("/").pop()}`, "#e74c3c");
+        setStatus(`\u{1F4A5} Demolished ${file.split("/").pop()}`);
+        break;
+      }
+      case "agentSearch": {
+        const query = ev.toolArgs || "code";
+        const file = ev.file;
+        addXP(3);
+        setState("walk", 1);
+        state.targetX = state.monaX + (Math.random() - 0.5) * 120;
+        spawnParticles(state.monaX + monaSize / 2, state.monaY + monaSize / 2, "#58a6ff", 5);
+        const logText = file ? `Searching ${file.split("/").pop()} for "${query}"` : `Searching for "${query}"`;
+        addLog(logText.slice(0, 40), "#58a6ff");
+        setStatus(`\u{1F50E} Searching: ${query.slice(0, 20)}...`);
+        break;
+      }
+      case "agentErrorCheck": {
+        addXP(3);
+        setState("idle", 1.5);
+        spawnParticles(state.monaX + monaSize / 2, state.monaY, "#f39c12", 4);
+        addLog("Checking for errors...", "#f39c12");
+        setStatus("\u{1F52C} Inspecting diagnostics...");
+        break;
+      }
+      case "agentPatch": {
+        const file = ev.file || "unknown";
+        addXP(10);
+        setState("code", 2);
+        spawnCodingParticles();
+        spawnConstructionParticles();
+        sfxCopilot();
+        addLog(`Applying patch to ${file.split("/").pop()}`, "#e67e22");
+        setStatus(`\u{1F527} Patching ${file.split("/").pop()}`);
+        break;
+      }
+      case "toolCall": {
+        const tool = ev.toolName || "unknown";
+        const args = ev.toolArgs;
+        let logText;
+        let logColor = "#79c0ff";
+        if (tool.includes("read") || tool.includes("list")) {
+          logText = args ? `Reading ${args.split("/").pop()}...` : `Reading file...`;
+          logColor = "#58a6ff";
+        } else if (tool.includes("edit") || tool.includes("insert") || tool.includes("replace")) {
+          logText = args ? `Editing ${args.split("/").pop()}...` : `Editing code...`;
+          logColor = "#79c0ff";
+        } else if (tool.includes("Terminal") || tool.includes("terminal")) {
+          logText = args ? `Running: ${args.slice(0, 30)}` : `Running command...`;
+          logColor = "#9b59b6";
+        } else if (tool.includes("search") || tool.includes("grep")) {
+          logText = args ? `Searching: "${args.slice(0, 25)}"` : `Searching...`;
+          logColor = "#58a6ff";
+        } else if (tool.includes("create") || tool.includes("Create")) {
+          logText = args ? `Creating ${args.split("/").pop()}` : `Creating file...`;
+          logColor = "#2ecc71";
+        } else if (tool.includes("delete") || tool.includes("Delete")) {
+          logText = args ? `Deleting ${args.split("/").pop()}` : `Deleting...`;
+          logColor = "#e74c3c";
+        } else if (tool.includes("error") || tool.includes("Error") || tool.includes("diagnostic")) {
+          logText = `Checking diagnostics...`;
+          logColor = "#f39c12";
+        } else if (tool.includes("patch") || tool.includes("Patch")) {
+          logText = args ? `Patching ${args.split("/").pop()}` : `Applying patch...`;
+          logColor = "#e67e22";
+        } else {
+          logText = `Tool: ${tool}`;
+        }
+        addLog(logText, logColor);
+        break;
+      }
+      case "detectionMode": {
+        state.detectionMode = ev.detectionMode || "heuristic";
+        const modeLabel = state.detectionMode === "log" ? "\u{1F4E1} Log Mode" : "\u{1F50D} Heuristic Mode";
+        addLog(`Detection: ${modeLabel}`, state.detectionMode === "log" ? "#58a6ff" : "#f1c40f");
         break;
       }
       case "agentTerminal": {

@@ -38,8 +38,307 @@ var vscode2 = __toESM(require("vscode"));
 
 // src/events.ts
 var vscode = __toESM(require("vscode"));
+var fs = __toESM(require("fs"));
+var path = __toESM(require("path"));
+var os = __toESM(require("os"));
+var TOOL_MAP = {
+  readFile: "read",
+  read_file: "read",
+  editFile: "edit",
+  insert_edit_into_file: "edit",
+  replace_string_in_file: "edit",
+  runTerminalCommand: "terminal",
+  run_in_terminal: "terminal",
+  searchFiles: "search",
+  grep_search: "search",
+  file_search: "search",
+  listFiles: "read",
+  list_directory: "read",
+  createFile: "create",
+  create_new_file: "create",
+  deleteFile: "delete",
+  getErrors: "errors",
+  get_diagnostics: "errors",
+  applyPatch: "patch"
+};
+var TOOL_CALL_PATTERNS = [
+  // "Tool call: toolName" or "Calling tool: toolName"
+  /(?:Tool call|Calling tool|tool_call|ToolCall)[:\s]+['"]?(\w+)['"]?/i,
+  // "tool_name": "readFile"  (JSON-like)
+  /"tool_name"\s*:\s*"(\w+)"/,
+  // name: "readFile" in tool_use blocks
+  /name[:\s]+['"]?(\w+)['"]?\s/,
+  // function_call patterns
+  /function_call.*?name[:\s]+['"]?(\w+)['"]?/i,
+  // [tool] readFile
+  /\[tool\]\s+(\w+)/i
+];
+var FILE_ARG_PATTERNS = [
+  /"(?:file|path|filePath|fileName)"\s*:\s*"([^"]+)"/,
+  /(?:file|path)=["']?([^\s"']+)/i
+];
+var COMMAND_ARG_PATTERNS = [
+  /"(?:command|cmd)"\s*:\s*"([^"]+)"/,
+  /(?:command|cmd)=["']?([^\s"']+)/i
+];
+var SEARCH_ARG_PATTERNS = [
+  /"(?:query|pattern|search|text)"\s*:\s*"([^"]+)"/,
+  /(?:query|pattern)=["']?([^\s"']+)/i
+];
+function extractArg(line, patterns) {
+  for (const p of patterns) {
+    const m = line.match(p);
+    if (m)
+      return m[1];
+  }
+  return void 0;
+}
+function findCopilotLogFiles() {
+  const candidates = [];
+  const platform2 = os.platform();
+  let logBase;
+  if (platform2 === "darwin") {
+    logBase = path.join(os.homedir(), "Library", "Application Support", "Code", "logs");
+  } else if (platform2 === "win32") {
+    logBase = path.join(process.env.APPDATA || "", "Code", "logs");
+  } else {
+    logBase = path.join(os.homedir(), ".config", "Code", "logs");
+  }
+  const logBases = [
+    logBase,
+    logBase.replace("/Code/", "/Code - Insiders/"),
+    logBase.replace("/Code/", "/VSCodium/")
+  ];
+  for (const base of logBases) {
+    try {
+      if (!fs.existsSync(base))
+        continue;
+      const sessions = fs.readdirSync(base).filter((d) => {
+        try {
+          return fs.statSync(path.join(base, d)).isDirectory();
+        } catch {
+          return false;
+        }
+      }).sort((a, b) => {
+        try {
+          return fs.statSync(path.join(base, b)).mtimeMs - fs.statSync(path.join(base, a)).mtimeMs;
+        } catch {
+          return 0;
+        }
+      });
+      for (const session of sessions.slice(0, 3)) {
+        const sessionDir = path.join(base, session);
+        try {
+          const entries = fs.readdirSync(sessionDir);
+          for (const entry of entries) {
+            if (entry.startsWith("exthost") || entry.includes("extension")) {
+              const extDir = path.join(sessionDir, entry);
+              try {
+                const files = fs.readdirSync(extDir);
+                for (const f of files) {
+                  if (f.includes("GitHub.copilot") || f.includes("github.copilot")) {
+                    candidates.push(path.join(extDir, f));
+                  }
+                }
+                for (const f of files) {
+                  if (f.endsWith(".log") && (f.includes("output") || f.includes("copilot"))) {
+                    candidates.push(path.join(extDir, f));
+                  }
+                }
+              } catch {
+              }
+            }
+          }
+        } catch {
+        }
+      }
+    } catch {
+    }
+  }
+  const extBase = path.join(os.homedir(), ".vscode", "extensions");
+  const extBases = [
+    extBase,
+    extBase.replace(".vscode", ".vscode-insiders")
+  ];
+  for (const base of extBases) {
+    try {
+      if (!fs.existsSync(base))
+        continue;
+      const dirs = fs.readdirSync(base).filter((d) => d.startsWith("github.copilot-chat-"));
+      for (const d of dirs) {
+        const extDir = path.join(base, d);
+        try {
+          const walk = (dir, depth = 0) => {
+            if (depth > 2)
+              return;
+            const entries = fs.readdirSync(dir);
+            for (const e of entries) {
+              const full = path.join(dir, e);
+              try {
+                const stat = fs.statSync(full);
+                if (stat.isFile() && e.endsWith(".log")) {
+                  candidates.push(full);
+                } else if (stat.isDirectory() && depth < 2) {
+                  walk(full, depth + 1);
+                }
+              } catch {
+              }
+            }
+          };
+          walk(extDir);
+        } catch {
+        }
+      }
+    } catch {
+    }
+  }
+  const gsBase = platform2 === "darwin" ? path.join(os.homedir(), "Library", "Application Support", "Code", "User", "globalStorage") : platform2 === "win32" ? path.join(process.env.APPDATA || "", "Code", "User", "globalStorage") : path.join(os.homedir(), ".config", "Code", "User", "globalStorage");
+  const gsDirs = ["github.copilot-chat", "github.copilot"];
+  for (const gsDir of gsDirs) {
+    const gsPath = path.join(gsBase, gsDir);
+    try {
+      if (fs.existsSync(gsPath)) {
+        const walk = (dir, depth = 0) => {
+          if (depth > 2)
+            return;
+          const entries = fs.readdirSync(dir);
+          for (const e of entries) {
+            const full = path.join(dir, e);
+            try {
+              const stat = fs.statSync(full);
+              if (stat.isFile() && e.endsWith(".log")) {
+                candidates.push(full);
+              } else if (stat.isDirectory() && depth < 2) {
+                walk(full, depth + 1);
+              }
+            } catch {
+            }
+          }
+        };
+        walk(gsPath);
+      }
+    } catch {
+    }
+  }
+  return candidates.filter((f) => {
+    try {
+      return fs.statSync(f).isFile();
+    } catch {
+      return false;
+    }
+  }).sort((a, b) => {
+    try {
+      return fs.statSync(b).mtimeMs - fs.statSync(a).mtimeMs;
+    } catch {
+      return 0;
+    }
+  });
+}
+var CopilotLogTailer = class {
+  constructor(onToolCall) {
+    this.watchers = [];
+    this.filePositions = /* @__PURE__ */ new Map();
+    this.disposed = false;
+    this.watchedFiles = /* @__PURE__ */ new Set();
+    this.onToolCall = onToolCall;
+  }
+  start() {
+    const logFiles = findCopilotLogFiles();
+    if (logFiles.length === 0)
+      return false;
+    for (const logFile of logFiles.slice(0, 5)) {
+      this.tailFile(logFile);
+    }
+    this.scanInterval = setInterval(() => {
+      if (this.disposed)
+        return;
+      const newFiles = findCopilotLogFiles();
+      for (const f of newFiles.slice(0, 5)) {
+        if (!this.watchedFiles.has(f)) {
+          this.tailFile(f);
+        }
+      }
+    }, 3e4);
+    return this.watchedFiles.size > 0;
+  }
+  tailFile(filePath) {
+    if (this.watchedFiles.has(filePath))
+      return;
+    this.watchedFiles.add(filePath);
+    try {
+      const stat = fs.statSync(filePath);
+      this.filePositions.set(filePath, stat.size);
+      const watcher = fs.watchFile(filePath, { interval: 500 }, () => {
+        if (this.disposed)
+          return;
+        this.readNewLines(filePath);
+      });
+    } catch {
+      this.watchedFiles.delete(filePath);
+    }
+  }
+  readNewLines(filePath) {
+    try {
+      const stat = fs.statSync(filePath);
+      const lastPos = this.filePositions.get(filePath) || 0;
+      if (stat.size <= lastPos) {
+        if (stat.size < lastPos) {
+          this.filePositions.set(filePath, 0);
+        }
+        return;
+      }
+      const fd = fs.openSync(filePath, "r");
+      const bufSize = Math.min(stat.size - lastPos, 64 * 1024);
+      const buf = Buffer.alloc(bufSize);
+      fs.readSync(fd, buf, 0, bufSize, lastPos);
+      fs.closeSync(fd);
+      this.filePositions.set(filePath, lastPos + bufSize);
+      const newText = buf.toString("utf8");
+      const lines = newText.split("\n");
+      for (const line of lines) {
+        this.parseLine(line);
+      }
+    } catch {
+    }
+  }
+  parseLine(line) {
+    if (!line || line.length < 5)
+      return;
+    for (const pattern of TOOL_CALL_PATTERNS) {
+      const match = line.match(pattern);
+      if (match) {
+        const toolName = match[1];
+        const category = TOOL_MAP[toolName];
+        if (category) {
+          const file = extractArg(line, FILE_ARG_PATTERNS);
+          let args;
+          if (category === "terminal")
+            args = extractArg(line, COMMAND_ARG_PATTERNS);
+          if (category === "search")
+            args = extractArg(line, SEARCH_ARG_PATTERNS);
+          this.onToolCall(toolName, category, file, args);
+          return;
+        }
+      }
+    }
+  }
+  dispose() {
+    this.disposed = true;
+    if (this.scanInterval)
+      clearInterval(this.scanInterval);
+    for (const f of this.watchedFiles) {
+      try {
+        fs.unwatchFile(f);
+      } catch {
+      }
+    }
+    this.watchedFiles.clear();
+    this.filePositions.clear();
+  }
+};
 function createEventListeners(panel, context) {
   const disposables = [];
+  let detectionMode = "heuristic";
   let lastUserCursorMove = 0;
   let lastUserFocusedDoc;
   let lastActiveEditorUri;
@@ -99,9 +398,9 @@ function createEventListeners(panel, context) {
     if (fullIdleTimeout)
       clearTimeout(fullIdleTimeout);
     if (agentState === "COPILOT_ACTIVE") {
-      agentIdleTimeout = setTimeout(() => setAgentState("COPILOT_IDLE"), 5e3);
+      agentIdleTimeout = setTimeout(() => setAgentState("COPILOT_IDLE"), 8e3);
     } else if (agentState === "COPILOT_IDLE") {
-      fullIdleTimeout = setTimeout(() => setAgentState("IDLE"), 15e3);
+      fullIdleTimeout = setTimeout(() => setAgentState("IDLE"), 2e4);
     }
   }
   function signalAgent() {
@@ -115,6 +414,46 @@ function createEventListeners(panel, context) {
   function isUserActive() {
     return Date.now() - lastUserCursorMove < 500;
   }
+  const logTailer = new CopilotLogTailer((toolName, category, file, args) => {
+    signalAgent();
+    post({ type: "toolCall", toolName, toolArgs: file || args });
+    const relPath = file ? vscode.workspace.asRelativePath(file) : void 0;
+    if (relPath)
+      sessionFiles.add(relPath);
+    switch (category) {
+      case "read":
+        if (relPath) {
+          post({ type: "agentFileOpen", file: relPath });
+        }
+        break;
+      case "edit":
+        sessionLinesWritten += 1;
+        post({ type: "agentFileEdit", file: relPath || "unknown", linesChanged: 1 });
+        break;
+      case "create":
+        post({ type: "agentFileCreate", file: relPath || "unknown" });
+        break;
+      case "delete":
+        post({ type: "agentFileDelete", file: relPath || "unknown" });
+        break;
+      case "terminal":
+        sessionTerminalCmds++;
+        post({ type: "agentTerminal", toolArgs: args });
+        break;
+      case "search":
+        post({ type: "agentSearch", toolArgs: args, file: relPath });
+        break;
+      case "errors":
+        post({ type: "agentErrorCheck" });
+        break;
+      case "patch":
+        post({ type: "agentPatch", file: relPath });
+        break;
+    }
+  });
+  const logStarted = logTailer.start();
+  detectionMode = logStarted ? "log" : "heuristic";
+  disposables.push({ dispose: () => logTailer.dispose() });
   disposables.push(
     vscode.window.onDidChangeTextEditorSelection((e) => {
       lastUserCursorMove = Date.now();
@@ -165,14 +504,23 @@ function createEventListeners(panel, context) {
       if (isMultiFileRapid)
         agentScore += 2;
       if (agentScore >= 2 && isNotUserTyping) {
-        signalAgent();
+        if (detectionMode === "heuristic") {
+          signalAgent();
+        }
         sessionFiles.add(relPath);
         if (totalDeleted > totalInserted && totalDeleted > 10) {
           sessionLinesDeleted += Math.max(1, linesRemoved);
-          post({ type: "agentCodeDelete", file: relPath, linesDeleted: Math.max(1, linesRemoved) });
+          if (detectionMode === "heuristic") {
+            post({ type: "agentCodeDelete", file: relPath, linesDeleted: Math.max(1, linesRemoved) });
+          }
         } else {
-          sessionLinesWritten += Math.max(1, linesInserted);
-          post({ type: "agentFileEdit", file: relPath, linesChanged: Math.max(1, linesInserted) });
+          const lines = Math.max(1, linesInserted);
+          sessionLinesWritten += lines;
+          if (detectionMode === "heuristic") {
+            post({ type: "agentFileEdit", file: relPath, linesChanged: lines });
+          } else {
+            post({ type: "agentFileEdit", file: relPath, linesChanged: lines });
+          }
         }
       }
     })
@@ -185,9 +533,11 @@ function createEventListeners(panel, context) {
       setTimeout(() => {
         if (docUri !== lastActiveEditorUri) {
           const relPath = vscode.workspace.asRelativePath(doc.uri);
-          signalAgent();
-          sessionFiles.add(relPath);
-          post({ type: "agentFileOpen", file: relPath });
+          if (detectionMode === "heuristic") {
+            signalAgent();
+            sessionFiles.add(relPath);
+            post({ type: "agentFileOpen", file: relPath });
+          }
         }
       }, 100);
     })
@@ -196,16 +546,18 @@ function createEventListeners(panel, context) {
     vscode.workspace.onDidCreateFiles((e) => {
       for (const file of e.files) {
         const relPath = vscode.workspace.asRelativePath(file);
-        signalAgent();
-        sessionFiles.add(relPath);
-        post({ type: "agentFileCreate", file: relPath });
+        if (detectionMode === "heuristic") {
+          signalAgent();
+          sessionFiles.add(relPath);
+          post({ type: "agentFileCreate", file: relPath });
+        }
       }
     })
   );
   disposables.push(
     vscode.window.onDidOpenTerminal(() => {
       const activeTerminal = vscode.window.activeTerminal;
-      if (!activeTerminal) {
+      if (!activeTerminal && detectionMode === "heuristic") {
         signalAgent();
         sessionTerminalCmds++;
         post({ type: "agentTerminal" });
@@ -214,7 +566,7 @@ function createEventListeners(panel, context) {
   );
   disposables.push(
     vscode.window.onDidChangeActiveTerminal(() => {
-      if (!isUserActive()) {
+      if (!isUserActive() && detectionMode === "heuristic") {
         signalAgent();
         sessionTerminalCmds++;
         post({ type: "agentTerminal" });
@@ -289,6 +641,7 @@ function createEventListeners(panel, context) {
     })
   );
   post({ type: "agentStateChange", agentState: "IDLE" });
+  post({ type: "detectionMode", detectionMode });
   return disposables;
 }
 
